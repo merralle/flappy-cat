@@ -533,8 +533,7 @@
     for (const p of trailParticles) {
       const alpha = p.life;
       const sz = p.size * p.life;
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = `hsl(${p.hue}, 100%, 65%)`;
+      ctx.shadowBlur = 0;
 
       // Glowing core dot
       ctx.beginPath();
