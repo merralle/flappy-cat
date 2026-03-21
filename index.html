@@ -56,6 +56,31 @@
   let trailParticles = [];
   let trailHue = 0;
 
+  // ─── Mobile detection ────────────────────────────────────────────────────────
+  const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+  // ─── Pre-render static background (sky + ground + grass) ────────────────────
+  const staticBg = document.createElement('canvas');
+  staticBg.width = W; staticBg.height = H;
+  const sbCtx = staticBg.getContext('2d');
+  const skyGrad = sbCtx.createLinearGradient(0, 0, 0, H - GROUND_H);
+  skyGrad.addColorStop(0, '#5bc8e8');
+  skyGrad.addColorStop(1, '#c8eefd');
+  sbCtx.fillStyle = skyGrad;
+  sbCtx.fillRect(0, 0, W, H - GROUND_H);
+  sbCtx.fillStyle = '#7dc956';
+  sbCtx.fillRect(0, H - GROUND_H, W, 22);
+  sbCtx.fillStyle = '#a5622d';
+  sbCtx.fillRect(0, H - GROUND_H + 22, W, GROUND_H - 22);
+  sbCtx.fillStyle = '#5aad3a';
+  for (let gx = 0; gx < W; gx += 14) {
+    const gh = 6 + Math.sin(gx * 0.7) * 3;
+    sbCtx.beginPath();
+    sbCtx.moveTo(gx, H - GROUND_H + 2);
+    sbCtx.quadraticCurveTo(gx + 3, H - GROUND_H - gh, gx + 6, H - GROUND_H + 2);
+    sbCtx.fill();
+  }
+
   // ─── Clouds ──────────────────────────────────────────────────────────────────
   const clouds = Array.from({ length: 6 }, (_, i) => ({
     x: Math.random() * W,
@@ -121,14 +146,10 @@
 
   // ─── Draw background ─────────────────────────────────────────────────────────
   function drawBg() {
-    // Sky
-    const sky = ctx.createLinearGradient(0, 0, 0, H - GROUND_H);
-    sky.addColorStop(0, '#5bc8e8');
-    sky.addColorStop(1, '#c8eefd');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, W, H - GROUND_H);
+    // Draw pre-rendered static background (sky + ground + grass)
+    ctx.drawImage(staticBg, 0, 0);
 
-    // Clouds
+    // Clouds (dynamic — redraw each frame)
     ctx.fillStyle = 'rgba(255,255,255,0.88)';
     clouds.forEach(c => {
       ctx.beginPath();
@@ -137,22 +158,6 @@
       ctx.ellipse(c.x + c.r * 0.55, c.y + 4, c.r * 0.65, c.r * 0.5, 0, 0, Math.PI * 2);
       ctx.fill();
     });
-
-    // Ground
-    ctx.fillStyle = '#7dc956';
-    ctx.fillRect(0, H - GROUND_H, W, 22);
-    ctx.fillStyle = '#a5622d';
-    ctx.fillRect(0, H - GROUND_H + 22, W, GROUND_H - 22);
-
-    // Grass tufts
-    ctx.fillStyle = '#5aad3a';
-    for (let gx = 0; gx < W; gx += 14) {
-      const h = 6 + Math.sin(gx * 0.7) * 3;
-      ctx.beginPath();
-      ctx.moveTo(gx, H - GROUND_H + 2);
-      ctx.quadraticCurveTo(gx + 3, H - GROUND_H - h, gx + 6, H - GROUND_H + 2);
-      ctx.fill();
-    }
   }
 
   // ─── Draw a single yarn ball ──────────────────────────────────────────────────
@@ -501,7 +506,7 @@
 
   // ─── Rainbow sparkle trail ───────────────────────────────────────────────────
   function spawnTrailParticles() {
-    const count = 2 + Math.floor(Math.random() * 2);
+    const count = isMobile ? 1 : 2 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) {
       trailHue = (trailHue + 18) % 360;
       trailParticles.push({
