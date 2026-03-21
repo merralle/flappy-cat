@@ -59,27 +59,16 @@
   // ─── Mobile detection ────────────────────────────────────────────────────────
   const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
-  // ─── Pre-render static background (sky + ground + grass) ────────────────────
-  const staticBg = document.createElement('canvas');
-  staticBg.width = W; staticBg.height = H;
-  const sbCtx = staticBg.getContext('2d');
-  const skyGrad = sbCtx.createLinearGradient(0, 0, 0, H - GROUND_H);
-  skyGrad.addColorStop(0, '#5bc8e8');
-  skyGrad.addColorStop(1, '#c8eefd');
-  sbCtx.fillStyle = skyGrad;
-  sbCtx.fillRect(0, 0, W, H - GROUND_H);
-  sbCtx.fillStyle = '#7dc956';
-  sbCtx.fillRect(0, H - GROUND_H, W, 22);
-  sbCtx.fillStyle = '#a5622d';
-  sbCtx.fillRect(0, H - GROUND_H + 22, W, GROUND_H - 22);
-  sbCtx.fillStyle = '#5aad3a';
-  for (let gx = 0; gx < W; gx += 14) {
-    const gh = 6 + Math.sin(gx * 0.7) * 3;
-    sbCtx.beginPath();
-    sbCtx.moveTo(gx, H - GROUND_H + 2);
-    sbCtx.quadraticCurveTo(gx + 3, H - GROUND_H - gh, gx + 6, H - GROUND_H + 2);
-    sbCtx.fill();
-  }
+  // ─── Biome state ─────────────────────────────────────────────────────────────
+  const TRANSITION_FRAMES = 90;
+  let biome     = 0;
+  let nextBiome = 0;
+  let biomeT    = 90;
+  const biomeBgA = document.createElement('canvas');
+  const biomeBgB = document.createElement('canvas');
+  biomeBgA.width = W; biomeBgA.height = H;
+  biomeBgB.width = W; biomeBgB.height = H;
+  let lightMotes = [], forestOrbs = [], snowflakes = [], embers = [];
 
   // ─── Clouds ──────────────────────────────────────────────────────────────────
   const clouds = Array.from({ length: 6 }, (_, i) => ({
@@ -115,6 +104,9 @@
     cat.vy = 0; cat.rot = 0; cat.flapAnim = 0;
     pipes = []; score = 0; frame = 0;
     trailParticles = [];
+    biome = 0; nextBiome = 0; biomeT = TRANSITION_FRAMES;
+    lightMotes = []; forestOrbs = []; snowflakes = []; embers = [];
+    buildBiomeBg(biomeBgA, 0);
     state = 'start';
   }
 
@@ -144,12 +136,496 @@
     ctx.closePath();
   }
 
-  // ─── Draw background ─────────────────────────────────────────────────────────
-  function drawBg() {
-    // Draw pre-rendered static background (sky + ground + grass)
-    ctx.drawImage(staticBg, 0, 0);
+  // ─── Biome helpers ───────────────────────────────────────────────────────────
+  function getBiomeIndex(s) {
+    if (s < 7) return 0;
+    return Math.floor((s - 7) / 7) % 4 + 1;
+  }
 
-    // Clouds (dynamic — redraw each frame)
+  const BIOME_DEFS = [
+    { skyTop: '#5bc8e8', skyBot: '#c8eefd', grassCol: '#7dc956', tuftsCol: '#5aad3a', dirtCol: '#a5622d' },
+    { skyTop: '#1a3a0a', skyBot: '#a07830', grassCol: '#4a7a1a', tuftsCol: '#3a6015', dirtCol: '#5a3010' },
+    { skyTop: '#0d0d2b', skyBot: '#1a2a4a', grassCol: '#1a3a20', tuftsCol: '#0e2616', dirtCol: '#0d1a10' },
+    { skyTop: '#c8dce8', skyBot: '#eef4f8', grassCol: '#e8eef2', tuftsCol: '#d0dce6', dirtCol: '#8899aa' },
+    { skyTop: '#1a0a00', skyBot: '#3d1000', grassCol: '#1a1208', tuftsCol: '#0e0e08', dirtCol: '#2a1800' },
+  ];
+
+  function drawMountainSilhouette(bCtx) {
+    const groundY = H - GROUND_H;
+    bCtx.fillStyle = '#8eaab8';
+    const peaks = [
+      { x: 40, h: 160 }, { x: 130, h: 220 }, { x: 230, h: 180 },
+      { x: 330, h: 200 }, { x: 430, h: 150 },
+    ];
+    peaks.forEach(({ x, h }) => {
+      bCtx.beginPath();
+      bCtx.moveTo(x - 70, groundY);
+      bCtx.lineTo(x, groundY - h);
+      bCtx.lineTo(x + 70, groundY);
+      bCtx.closePath();
+      bCtx.fill();
+    });
+    // Snow caps
+    bCtx.fillStyle = '#eef4f8';
+    peaks.forEach(({ x, h }) => {
+      const capH = h * 0.28;
+      bCtx.beginPath();
+      bCtx.moveTo(x - 20, groundY - h + capH * 1.6);
+      bCtx.lineTo(x, groundY - h);
+      bCtx.lineTo(x + 20, groundY - h + capH * 1.6);
+      bCtx.closePath();
+      bCtx.fill();
+    });
+  }
+
+  function drawVolcanoSilhouette(bCtx) {
+    const groundY = H - GROUND_H;
+    const volcs = [{ x: 90, w: 160 }, { x: 250, w: 200 }, { x: 410, w: 140 }];
+    volcs.forEach(({ x, w }) => {
+      const h = w * 0.65;
+      // Volcano body
+      bCtx.fillStyle = '#1a0800';
+      bCtx.beginPath();
+      bCtx.moveTo(x - w / 2, groundY);
+      bCtx.lineTo(x - w * 0.1, groundY - h);
+      bCtx.lineTo(x + w * 0.1, groundY - h);
+      bCtx.lineTo(x + w / 2, groundY);
+      bCtx.closePath();
+      bCtx.fill();
+      // Crater glow
+      const grd = bCtx.createRadialGradient(x, groundY - h, 2, x, groundY - h, w * 0.25);
+      grd.addColorStop(0, 'rgba(255,120,0,0.7)');
+      grd.addColorStop(0.5, 'rgba(255,60,0,0.3)');
+      grd.addColorStop(1, 'rgba(255,0,0,0)');
+      bCtx.fillStyle = grd;
+      bCtx.beginPath();
+      bCtx.arc(x, groundY - h, w * 0.25, 0, Math.PI * 2);
+      bCtx.fill();
+    });
+  }
+
+  function drawRedwoodSilhouette(bCtx) {
+    const groundY = H - GROUND_H;
+
+    // Draw a drooping branch with leaf clusters
+    function drawBranch(tx, ty, dir, len, leafCol) {
+      // Branch stem
+      bCtx.beginPath();
+      bCtx.moveTo(tx, ty);
+      bCtx.quadraticCurveTo(tx + dir * len * 0.55, ty + len * 0.1, tx + dir * len, ty + len * 0.28);
+      bCtx.strokeStyle = '#3a1806';
+      bCtx.lineWidth = 1.8;
+      bCtx.stroke();
+      // Leaf clusters at 40%, 70% and tip
+      [[0.4, 0.08], [0.7, 0.18], [1.0, 0.28]].forEach(([t, dropFrac]) => {
+        const lx = tx + dir * len * t;
+        const ly = ty + len * dropFrac;
+        const lw = len * 0.24;
+        const lh = len * 0.11;
+        bCtx.beginPath();
+        bCtx.ellipse(lx, ly, lw, lh, dir * 0.25, 0, Math.PI * 2);
+        bCtx.fillStyle = leafCol;
+        bCtx.fill();
+        // Lighter fringe on top
+        bCtx.beginPath();
+        bCtx.ellipse(lx - dir * lw * 0.1, ly - lh * 0.4, lw * 0.55, lh * 0.45, dir * 0.25, 0, Math.PI * 2);
+        bCtx.fillStyle = 'rgba(70,140,25,0.28)';
+        bCtx.fill();
+      });
+    }
+
+    // Layered narrow crown at the very top of a redwood
+    function drawCanopy(tx, topY, w) {
+      const layers = [
+        { dy:   0, rw: w * 2.0, rh: 16, col: '#163d08' },
+        { dy: -13, rw: w * 1.6, rh: 14, col: '#1a4a0a' },
+        { dy: -24, rw: w * 1.3, rh: 13, col: '#1e520b' },
+        { dy: -34, rw: w * 1.0, rh: 11, col: '#1a4808' },
+        { dy: -43, rw: w * 0.7, rh:  9, col: '#1e5209' },
+        { dy: -51, rw: w * 0.4, rh:  7, col: '#22580a' },
+        { dy: -57, rw: w * 0.2, rh:  5, col: '#1a4808' },
+      ];
+      layers.forEach(({ dy, rw, rh, col }) => {
+        bCtx.beginPath();
+        bCtx.ellipse(tx, topY + dy, rw, rh, 0, 0, Math.PI * 2);
+        bCtx.fillStyle = col;
+        bCtx.fill();
+        // Sunlit highlight fringe
+        bCtx.beginPath();
+        bCtx.ellipse(tx - rw * 0.2, topY + dy - rh * 0.35, rw * 0.55, rh * 0.4, 0, 0, Math.PI * 2);
+        bCtx.fillStyle = 'rgba(70,150,20,0.18)';
+        bCtx.fill();
+      });
+    }
+
+    // Background trees — trunks + small canopy hint
+    const bgTrees = [20, 70, 120, 175, 230, 285, 340, 395, 445];
+    bgTrees.forEach(x => {
+      const h = 260 + Math.sin(x) * 60;
+      const w = 10 + Math.sin(x * 0.3) * 4;
+      bCtx.fillStyle = 'rgba(40,18,4,0.45)';
+      bCtx.fillRect(x - w / 2, groundY - h, w, h);
+      bCtx.fillStyle = 'rgba(90,45,10,0.2)';
+      bCtx.fillRect(x - w / 2 + 2, groundY - h, 2, h);
+      // Simple bg canopy
+      bCtx.beginPath();
+      bCtx.ellipse(x, groundY - h, w * 1.8, 13, 0, 0, Math.PI * 2);
+      bCtx.fillStyle = 'rgba(18,52,6,0.5)';
+      bCtx.fill();
+    });
+
+    // Foreground trees — trunks, branches, canopy
+    const fgTrees = [
+      { x: 0,   h: 420, w: 22 },
+      { x: 80,  h: 480, w: 26 },
+      { x: 160, h: 390, w: 20 },
+      { x: 250, h: 500, w: 28 },
+      { x: 340, h: 460, w: 24 },
+      { x: 420, h: 410, w: 21 },
+      { x: 480, h: 440, w: 23 },
+    ];
+    fgTrees.forEach(({ x, h, w }) => {
+      // Trunk
+      const grad = bCtx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+      grad.addColorStop(0,   '#3a1806');
+      grad.addColorStop(0.3, '#7a3a10');
+      grad.addColorStop(0.6, '#6a3010');
+      grad.addColorStop(1,   '#2e1204');
+      bCtx.fillStyle = grad;
+      bCtx.fillRect(x - w / 2, groundY - h, w, h);
+      bCtx.fillStyle = 'rgba(160,80,20,0.25)';
+      bCtx.fillRect(x - w / 2 + 4, groundY - h, 2, h);
+      bCtx.fillStyle = 'rgba(20,8,0,0.3)';
+      bCtx.fillRect(x + w / 2 - 5, groundY - h, 2, h);
+
+      // Branches — 6 levels from ~20% to ~75% up the trunk, alternating sides
+      const branchSpecs = [0.22, 0.34, 0.44, 0.54, 0.63, 0.72];
+      branchSpecs.forEach((frac, b) => {
+        const by  = groundY - h * frac;
+        const len = (w * 2.8) * (1 - frac * 0.4); // shorter higher up
+        const dir = b % 2 === 0 ? -1 : 1;
+        const leafCol = frac > 0.55 ? '#1e5209' : '#1a4a08';
+        drawBranch(x + dir * (w * 0.35), by, dir, len, leafCol);
+        // Opposite shorter branch at same level
+        drawBranch(x - dir * (w * 0.35), by + 10, -dir, len * 0.65, leafCol);
+      });
+
+      // Canopy crown at top
+      drawCanopy(x, groundY - h, w);
+    });
+
+    // Forest floor ferns
+    bCtx.fillStyle = '#3a6010';
+    for (let fx = 0; fx < W; fx += 18) {
+      const fh = 8 + Math.sin(fx * 0.5) * 4;
+      bCtx.beginPath();
+      bCtx.moveTo(fx, groundY);
+      bCtx.quadraticCurveTo(fx + 5, groundY - fh, fx + 10, groundY);
+      bCtx.fill();
+    }
+    // Canopy light shafts
+    for (let i = 0; i < 5; i++) {
+      const sx = 40 + i * 95 + Math.sin(i * 2.1) * 20;
+      const shaftGrad = bCtx.createLinearGradient(sx, 0, sx + 30, groundY * 0.7);
+      shaftGrad.addColorStop(0, 'rgba(220,180,60,0.18)');
+      shaftGrad.addColorStop(1, 'rgba(220,180,60,0)');
+      bCtx.fillStyle = shaftGrad;
+      bCtx.beginPath();
+      bCtx.moveTo(sx, 0);
+      bCtx.lineTo(sx + 30, 0);
+      bCtx.lineTo(sx + 60, groundY * 0.7);
+      bCtx.lineTo(sx - 10, groundY * 0.7);
+      bCtx.closePath();
+      bCtx.fill();
+    }
+  }
+
+  function drawForestStars(bCtx) {
+    for (let i = 0; i < 80; i++) {
+      const sx = Math.random() * W;
+      const sy = Math.random() * 300;
+      const sr = 0.8 + Math.random() * 1.2;
+      const sa = 0.5 + Math.random() * 0.5;
+      bCtx.beginPath();
+      bCtx.arc(sx, sy, sr, 0, Math.PI * 2);
+      bCtx.fillStyle = `rgba(255,255,255,${sa})`;
+      bCtx.fill();
+    }
+  }
+
+  function buildBiomeBg(offscreen, biomeId) {
+    const bCtx = offscreen.getContext('2d');
+    const d = BIOME_DEFS[biomeId];
+    // Sky gradient
+    const skyGrad = bCtx.createLinearGradient(0, 0, 0, H - GROUND_H);
+    skyGrad.addColorStop(0, d.skyTop);
+    skyGrad.addColorStop(1, d.skyBot);
+    bCtx.fillStyle = skyGrad;
+    bCtx.fillRect(0, 0, W, H - GROUND_H);
+    // Horizon decorations
+    if (biomeId === 1) drawRedwoodSilhouette(bCtx);
+    if (biomeId === 2) drawForestStars(bCtx);
+    if (biomeId === 3) drawMountainSilhouette(bCtx);
+    if (biomeId === 4) drawVolcanoSilhouette(bCtx);
+    // Ground
+    bCtx.fillStyle = d.grassCol;
+    bCtx.fillRect(0, H - GROUND_H, W, 22);
+    bCtx.fillStyle = d.dirtCol;
+    bCtx.fillRect(0, H - GROUND_H + 22, W, GROUND_H - 22);
+    // Tufts
+    bCtx.fillStyle = d.tuftsCol;
+    for (let gx = 0; gx < W; gx += 14) {
+      const gh = 6 + Math.sin(gx * 0.7) * 3;
+      bCtx.beginPath();
+      bCtx.moveTo(gx, H - GROUND_H + 2);
+      bCtx.quadraticCurveTo(gx + 3, H - GROUND_H - gh, gx + 6, H - GROUND_H + 2);
+      bCtx.fill();
+    }
+    // Biome-specific ground extras
+    if (biomeId === 3) {
+      // Snow rim
+      bCtx.fillStyle = 'rgba(255,255,255,0.4)';
+      bCtx.fillRect(0, H - GROUND_H, W, 6);
+    }
+    if (biomeId === 4) {
+      // Lava cracks
+      bCtx.strokeStyle = 'rgba(255,100,0,0.6)';
+      bCtx.lineWidth = 1.5;
+      for (let i = 0; i < 8; i++) {
+        const cx = 20 + Math.random() * (W - 40);
+        const cy = H - GROUND_H + 10 + Math.random() * 30;
+        bCtx.beginPath();
+        bCtx.moveTo(cx, cy);
+        bCtx.lineTo(cx + (Math.random() - 0.5) * 30, cy + 10 + Math.random() * 15);
+        bCtx.stroke();
+      }
+    }
+  }
+
+  // ─── Light motes (Redwood biome) ─────────────────────────────────────────────
+  function initLightMotes() {
+    const count = isMobile ? 20 : 40;
+    lightMotes = [];
+    for (let i = 0; i < count; i++) {
+      lightMotes.push({
+        x: Math.random() * W,
+        y: Math.random() * (H - GROUND_H - 40),
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: -0.1 - Math.random() * 0.25,
+        r: 1.5 + Math.random() * 2.5,
+        phase: Math.random() * Math.PI * 2,
+        life: 0.3 + Math.random() * 0.7,
+      });
+    }
+  }
+
+  function updateLightMotes() {
+    lightMotes.forEach(m => {
+      m.phase += 0.02;
+      m.x += m.vx + Math.sin(m.phase) * 0.2;
+      m.y += m.vy;
+      m.life -= 0.003;
+      if (m.life <= 0 || m.y < 0) {
+        m.x = Math.random() * W;
+        m.y = H - GROUND_H - 20 - Math.random() * 40;
+        m.life = 0.4 + Math.random() * 0.6;
+        m.vy = -0.1 - Math.random() * 0.25;
+      }
+    });
+  }
+
+  function drawLightMotes(alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    lightMotes.forEach(m => {
+      const a = m.life * 0.8;
+      const grd = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r * 4);
+      grd.addColorStop(0, `rgba(255,220,80,${a})`);
+      grd.addColorStop(0.4, `rgba(255,200,40,${a * 0.4})`);
+      grd.addColorStop(1, 'rgba(255,180,0,0)');
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.r * 4, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ─── Forest orbs ─────────────────────────────────────────────────────────────
+  function initForestOrbs() {
+    const count = isMobile ? 6 : 12;
+    forestOrbs = [];
+    for (let i = 0; i < count; i++) {
+      forestOrbs.push({
+        x: Math.random() * W,
+        y: 60 + Math.random() * (H - GROUND_H - 120),
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.3,
+        r: 4 + Math.random() * 8,
+        hue: Math.random() < 0.5 ? 180 : 280,
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+
+  function updateForestOrbs() {
+    forestOrbs.forEach(o => {
+      o.x += o.vx;
+      o.y += o.vy;
+      o.phase += 0.04;
+      if (o.x < 0) o.x = W;
+      if (o.x > W) o.x = 0;
+      if (o.y < 40 || o.y > H - GROUND_H - 20) o.vy *= -1;
+    });
+  }
+
+  function drawForestOrbs(alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    forestOrbs.forEach(o => {
+      const pulse = 0.5 + 0.5 * Math.sin(o.phase);
+      const r = o.r * (0.8 + 0.4 * pulse);
+      const grd = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, r * 3);
+      grd.addColorStop(0, `hsla(${o.hue},100%,80%,0.9)`);
+      grd.addColorStop(0.4, `hsla(${o.hue},100%,60%,0.4)`);
+      grd.addColorStop(1, `hsla(${o.hue},100%,40%,0)`);
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, r * 3, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ─── Snowflakes ──────────────────────────────────────────────────────────────
+  function initSnowflakes() {
+    const count = isMobile ? 30 : 55;
+    snowflakes = [];
+    for (let i = 0; i < count; i++) {
+      snowflakes.push({
+        x: Math.random() * W,
+        y: Math.random() * (H - GROUND_H),
+        vy: 0.5 + Math.random() * 1.5,
+        r: 1.5 + Math.random() * 2.5,
+        phase: Math.random() * Math.PI * 2,
+        amp: 0.5 + Math.random() * 1.0,
+      });
+    }
+  }
+
+  function updateSnowflakes() {
+    snowflakes.forEach(s => {
+      s.phase += 0.03;
+      s.x += Math.sin(s.phase) * s.amp;
+      s.y += s.vy;
+      if (s.y > H - GROUND_H) { s.y = -5; s.x = Math.random() * W; }
+    });
+  }
+
+  function drawSnowflakes(alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    snowflakes.forEach(s => {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ─── Embers ──────────────────────────────────────────────────────────────────
+  function initEmbers() {
+    const count = isMobile ? 20 : 40;
+    embers = [];
+    for (let i = 0; i < count; i++) {
+      embers.push({
+        x: Math.random() * W,
+        y: H - GROUND_H - 5 - Math.random() * 60,
+        vy: -(0.4 + Math.random() * 1.2),
+        r: 1.2 + Math.random() * 2.5,
+        hue: 20 + Math.random() * 30,
+        life: Math.random(),
+      });
+    }
+  }
+
+  function updateEmbers() {
+    embers.forEach(e => {
+      e.y += e.vy;
+      e.life -= 0.008;
+      if (e.life <= 0 || e.y < H - GROUND_H - 200) {
+        e.x = Math.random() * W;
+        e.y = H - GROUND_H - 5 - Math.random() * 20;
+        e.life = 0.5 + Math.random() * 0.5;
+        e.vy = -(0.4 + Math.random() * 1.2);
+      }
+    });
+  }
+
+  function drawEmbers(alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    embers.forEach(e => {
+      const a = e.life;
+      const grd = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.r * 3);
+      grd.addColorStop(0, `hsla(${e.hue},100%,80%,${a})`);
+      grd.addColorStop(1, `hsla(${e.hue},100%,40%,0)`);
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r * 3, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ─── Biome transition ────────────────────────────────────────────────────────
+  function checkBiomeTransition() {
+    const target = getBiomeIndex(score);
+    if (target !== nextBiome) {
+      nextBiome = target;
+      biomeT = 0;
+      buildBiomeBg(biomeBgB, target);
+      if (target === 1) initLightMotes();
+      if (target === 2) initForestOrbs();
+      if (target === 3) initSnowflakes();
+      if (target === 4) initEmbers();
+    }
+  }
+
+  function updateBiome() {
+    if (biomeT < TRANSITION_FRAMES) {
+      biomeT++;
+      if (biomeT >= TRANSITION_FRAMES) {
+        // Promote B → A
+        const aCtx = biomeBgA.getContext('2d');
+        aCtx.clearRect(0, 0, W, H);
+        aCtx.drawImage(biomeBgB, 0, 0);
+        biome = nextBiome;
+      }
+    }
+    // Cloud scroll
+    clouds.forEach(c => { c.x -= c.spd; if (c.x < -80) c.x = W + 80; });
+    // Particle updates
+    if (biome === 1 || nextBiome === 1) updateLightMotes();
+    if (biome === 2 || nextBiome === 2) updateForestOrbs();
+    if (biome === 3 || nextBiome === 3) updateSnowflakes();
+    if (biome === 4 || nextBiome === 4) updateEmbers();
+  }
+
+  // ─── Draw clouds (standalone, with alpha) ────────────────────────────────────
+  function drawClouds(alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = 'rgba(255,255,255,0.88)';
     clouds.forEach(c => {
       ctx.beginPath();
@@ -158,6 +634,29 @@
       ctx.ellipse(c.x + c.r * 0.55, c.y + 4, c.r * 0.65, c.r * 0.5, 0, 0, Math.PI * 2);
       ctx.fill();
     });
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ─── Draw background ─────────────────────────────────────────────────────────
+  function drawBg() {
+    const t = biomeT / TRANSITION_FRAMES;
+    ctx.drawImage(biomeBgA, 0, 0);
+    if (biomeT < TRANSITION_FRAMES) {
+      ctx.globalAlpha = t;
+      ctx.drawImage(biomeBgB, 0, 0);
+      ctx.globalAlpha = 1;
+    }
+    if (biome === 0) drawClouds(1 - (biomeT < TRANSITION_FRAMES ? t : 0));
+    if (nextBiome === 0 && biomeT < TRANSITION_FRAMES) drawClouds(t);
+    if (biome === 1) drawLightMotes(1 - (biomeT < TRANSITION_FRAMES ? t : 0));
+    if (nextBiome === 1 && biomeT < TRANSITION_FRAMES) drawLightMotes(t);
+    if (biome === 2) drawForestOrbs(1 - (biomeT < TRANSITION_FRAMES ? t : 0));
+    if (nextBiome === 2 && biomeT < TRANSITION_FRAMES) drawForestOrbs(t);
+    if (biome === 3) drawSnowflakes(1 - (biomeT < TRANSITION_FRAMES ? t : 0));
+    if (nextBiome === 3 && biomeT < TRANSITION_FRAMES) drawSnowflakes(t);
+    if (biome === 4) drawEmbers(1 - (biomeT < TRANSITION_FRAMES ? t : 0));
+    if (nextBiome === 4 && biomeT < TRANSITION_FRAMES) drawEmbers(t);
   }
 
   // ─── Draw a single yarn ball ──────────────────────────────────────────────────
@@ -627,13 +1126,15 @@
 
   // ─── Main loop ───────────────────────────────────────────────────────────────
   function update() {
-    // Always scroll clouds
-    clouds.forEach(c => { c.x -= c.spd; if (c.x < -80) c.x = W + 80; });
+    // Biome update (clouds, particles, transitions)
+    updateBiome();
 
     // Trail particles fade even when not playing
     updateTrail();
 
     if (state !== 'playing') return;
+
+    checkBiomeTransition();
 
     frame++;
 
@@ -704,6 +1205,7 @@
     requestAnimationFrame(loop);
   }
 
+  buildBiomeBg(biomeBgA, 0);
   loop();
 </script>
 </body>
